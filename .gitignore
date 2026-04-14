@@ -1,3 +1,9 @@
 .env
 .venv/
 __pycache__/
+integraions/
+exports/
+*.log
+integrations/
+*.pdf
+.claude

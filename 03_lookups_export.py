@@ -27,6 +27,7 @@ APIs used:
 import io
 import json
 import logging
+import os
 import re
 import zipfile
 import urllib.parse
@@ -41,7 +42,8 @@ from oic_client import OICClient
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-OUTPUT_FILE = "OIC_Lookups_Report.xlsx"
+EXTS_DIR = os.path.join(os.path.dirname(__file__), "exports")
+OUTPUT_FILE = os.path.join(EXTS_DIR, "OIC_Lookups_Report.xlsx")
 
 # Set to True to enable deep IAR scanning (slower but catches XSLT-embedded lookups)
 ENABLE_IAR_SCAN = False
@@ -49,6 +51,9 @@ ENABLE_IAR_SCAN = False
 
 def main():
     client = OICClient()
+
+    # ── Create output directory ──
+    os.makedirs(EXTS_DIR, exist_ok=True)
 
     # ── Step 1: Fetch all lookups ──
     logger.info("Fetching all lookups...")

@@ -2,6 +2,7 @@
 01_integrations_export.py
 =========================
 Extracts ALL OIC Gen3 integration details → Excel workbook.
+Also downloads each integration as a .iar backup file.
 
 Sheets produced:
   1. Integrations  — master list with key fields
@@ -10,9 +11,14 @@ Sheets produced:
 API used:
   GET /ic/api/integration/v1/integrations
   GET /ic/api/integration/v1/integrations/{id}  (for dependency details)
+  GET /ic/api/integration/v1/integrations/{id}/archive  (IAR backup)
 """
 
 import logging
+import os
+import re
+import zipfile
+from datetime import datetime
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -23,11 +29,19 @@ from oic_client import OICClient
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-OUTPUT_FILE = "OIC_Integrations_Report.xlsx"
+EXTS_DIR = os.path.join(os.path.dirname(__file__), "exports")
+OUTPUT_FILE = os.path.join(EXTS_DIR, "OIC_Integrations_Report-latest.xlsx")
+INTEGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "integrations")
+BACKUP_DIR = os.path.join(INTEGRATIONS_DIR, f"integration_backups_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
 
 
 def main():
     client = OICClient()
+
+    # ── Create output directories ──
+    os.makedirs(EXTS_DIR, exist_ok=True)
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    logger.info("Backup folder: %s", BACKUP_DIR)
 
     # ── Fetch all integrations (list endpoint returns most fields) ──
     logger.info("Fetching all integrations...")
@@ -65,6 +79,21 @@ def main():
         dep_libraries = [lb.get("code", lb.get("display-name", ""))
                          for lb in (deps.get("libraries", []) or [])]
 
+        # ── Download IAR backup ──
+        backup_file = ""
+        if code and version:
+            safe_code = code.replace("/", "_").replace("\\", "_")
+            safe_ver  = version.replace("/", "_").replace("\\", "_")
+            iar_name  = f"{safe_code}_{safe_ver}.iar"
+            iar_path  = os.path.join(BACKUP_DIR, iar_name)
+            enc_id    = OICClient.encode_integration_id(code, version)
+            try:
+                client.export_integration(enc_id, iar_path)
+                backup_file = iar_path
+            except Exception as exc:
+                logger.warning("Could not back up %s|%s: %s", code, version, exc)
+                backup_file = f"ERROR: {exc}"
+
         rows.append({
             "Code": code,
             "Version": version,
@@ -98,9 +127,15 @@ def main():
             "Dep Libraries": " | ".join(dep_libraries) if dep_libraries else "",
             "Project Type": intg.get("projectType", intg.get("project-type", "")),
             "Compatible": intg.get("compatible", ""),
+            "Backup File": backup_file,
         })
 
     df = pd.DataFrame(rows)
+
+    # ── Backup summary log ──
+    backed_up = sum(1 for r in rows if r["Backup File"] and not r["Backup File"].startswith("ERROR"))
+    failed    = sum(1 for r in rows if r["Backup File"].startswith("ERROR"))
+    logger.info("IAR backups: %d saved, %d failed → folder: %s", backed_up, failed, BACKUP_DIR)
 
     # ── Summary DataFrame ──
     summary_rows = []

@@ -14,25 +14,27 @@ IMPORTANT — integrationInstance Query Parameter:
   This is the service instance name (found on OIC About page → Service instance field).
 """
 
+import os
 import time
 import logging
 import urllib.parse
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────
-#  Configuration — Fill these in
+#  Configuration — loaded from .env
 # ─────────────────────────────────────────────
-OIC_HOST           = "https://design.integration.us-phoenix-1.ocp.oraclecloud.com"
-INTEGRATION_INSTANCE = "sbec-oic-test-axyxkvtc3js2-px"   # Required on every API call
-
-# OAuth2 Client Credentials
-OIC_CLIENT_ID      = "e2676047f1314bc6a144487ff06474a0"
-OIC_CLIENT_SECRET  = "idcscs-d035008d-01b6-45cf-9507-10a16de40368"
-OIC_TOKEN_URL      = "https://idcs-177a4dff1b4f4488a6ad5f84ea9c8805.identity.oraclecloud.com:443/oauth2/v1/token"
-OIC_SCOPE          = "https://6CDDDA5174B847ED950BD4ACCA2E15DC.integration.us-phoenix-1.ocp.oraclecloud.com:443urn:opc:resource:consumer::all"  # e.g. the OIC scope from IDCS app
+OIC_HOST             = os.environ["OIC_HOST"]
+INTEGRATION_INSTANCE = os.environ["INTEGRATION_INSTANCE"]
+OIC_CLIENT_ID        = os.environ["OIC_CLIENT_ID"]
+OIC_CLIENT_SECRET    = os.environ["OIC_CLIENT_SECRET"]
+OIC_TOKEN_URL        = os.environ["OIC_TOKEN_URL"]
+OIC_SCOPE            = os.environ.get("OIC_TOKEN_SCOPE", "")
 
 
 # ─────────────────────────────────────────────
@@ -174,7 +176,17 @@ class OICClient:
 
         Returns: path to saved .iar file
         """
-        resp = self._get(f"/integrations/{integration_id}/archive", stream=True)
+        self._ensure_token()
+        url = f"{self.host}{BASE_PATH}/integrations/{integration_id}/archive"
+        params = {"integrationInstance": self.instance}
+        resp = self.session.get(
+            url,
+            params=params,
+            headers={"Accept": "application/octet-stream"},
+            stream=True,
+            timeout=120,
+        )
+        resp.raise_for_status()
         with open(output_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=8192):
                 f.write(chunk)

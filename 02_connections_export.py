@@ -16,6 +16,7 @@ APIs used:
 """
 
 import logging
+import os
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -26,49 +27,59 @@ from oic_client import OICClient
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-OUTPUT_FILE = "OIC_Connections_Report.xlsx"
+EXTS_DIR = os.path.join(os.path.dirname(__file__), "exports")
+OUTPUT_FILE = os.path.join(EXTS_DIR, "OIC_Connections_Report.xlsx")
 
 
 def main():
     client = OICClient()
+
+    # ── Create output directory ──
+    os.makedirs(EXTS_DIR, exist_ok=True)
 
     # ── Step 1: Fetch all connections ──
     logger.info("Fetching all connections...")
     connections = client.get_all_connections(limit=100)
     logger.info("Retrieved %d connections", len(connections))
 
-    # ── Step 2: Fetch all integrations (with expand=connection) for usage mapping ──
+    # ── Step 2: Fetch all integrations for usage mapping ──
+    # endPoints is always present in the list response — no expand needed.
     logger.info("Fetching all integrations for connection-usage mapping...")
-    integrations = client.get_all_integrations(limit=100, expand="connection")
+    integrations = client.get_all_integrations(limit=100)
     logger.info("Retrieved %d integrations", len(integrations))
 
     # ── Build connection → integration usage map ──
-    # Key: connection ID, Value: list of {integration_name, integration_id, role}
-    usage_map = {}
+    # Key: conn_id → dict of intg_id → row  (deduped per unique integration)
+    # A single integration can reference the same connection many times (multiple
+    # invoke activities). We keep one entry per (conn_id, intg_id) pair so the
+    # Connection Usage sheet shows one row per integration, not per activity.
+    usage_map = {}   # conn_id → { intg_id: {row dict} }
     for intg in integrations:
-        intg_id = intg.get("id", "")
-        intg_name = intg.get("name", "")
-        intg_status = intg.get("status", intg.get("activation-status", ""))
-        intg_code = intg.get("code", intg_id.split("|")[0] if "|" in intg_id else intg_id)
+        intg_id      = intg.get("id", "")
+        intg_name    = intg.get("name", "")
+        intg_status  = intg.get("status", intg.get("activation-status", ""))
+        intg_code    = intg.get("code", intg_id.split("|")[0] if "|" in intg_id else intg_id)
         intg_version = intg.get("version", intg_id.split("|")[1] if "|" in intg_id else "")
 
-        # endPoints array contains connection references
         endpoints = intg.get("endPoints", intg.get("end-points", []))
         for ep in (endpoints or []):
-            conn = ep.get("connection", {})
+            conn    = ep.get("connection", {})
             conn_id = conn.get("id", "")
             if not conn_id:
                 continue
             if conn_id not in usage_map:
-                usage_map[conn_id] = []
-            usage_map[conn_id].append({
-                "Integration Code": intg_code,
-                "Integration Version": intg_version,
-                "Integration Name": intg_name,
-                "Integration Status": intg_status,
-                "Endpoint Name": ep.get("name", ""),
-                "Role": ep.get("role", ""),
-            })
+                usage_map[conn_id] = {}
+            # Only add once per integration; first occurrence wins
+            if intg_id not in usage_map[conn_id]:
+                usage_map[conn_id][intg_id] = {
+                    "Integration Code":    intg_code,
+                    "Integration Version": intg_version,
+                    "Integration Name":    intg_name,
+                    "Integration Status":  intg_status,
+                    "Role":                ep.get("role", ""),
+                }
+
+    logger.info("Usage map: %d connection(s) used across integrations", len(usage_map))
 
     # ── Build Connections DataFrame ──
     conn_rows = []
@@ -94,9 +105,13 @@ def main():
                     prop_pairs.append(f"{p_name}={p_val}")
             prop_str = " | ".join(prop_pairs)
 
-        usage_count = len(usage_map.get(conn_id, []))
-        active_usage = len([u for u in usage_map.get(conn_id, [])
-                            if u["Integration Status"] == "ACTIVATED"])
+        usages = list(usage_map.get(conn_id, {}).values())
+        usage_count = len(usages)
+        active_usage = len([u for u in usages if u["Integration Status"] == "ACTIVATED"])
+        intg_names = " | ".join(
+            f"{u['Integration Name']} ({u['Integration Code']}|{u['Integration Version']}) [{u['Integration Status']}]"
+            for u in usages
+        )
 
         conn_rows.append({
             "Connection ID": conn_id,
@@ -112,6 +127,7 @@ def main():
             "% Complete": conn.get("percentageComplete", conn.get("percentage-complete", "")),
             "Total Usage": usage_count,
             "Active Usage": active_usage,
+            "Integrations Used In": intg_names,
             "Created By": conn.get("createdBy", conn.get("created-by", "")),
             "Created": conn.get("created", ""),
             "Last Updated By": conn.get("lastUpdatedBy", conn.get("last-updated-by", "")),
@@ -125,16 +141,15 @@ def main():
 
     # ── Build Usage DataFrame ──
     usage_rows = []
-    for conn_id, usages in usage_map.items():
-        # Find connection name
+    for conn_id, intg_dict in usage_map.items():
         conn_name = ""
         for c in conn_rows:
             if c["Connection ID"] == conn_id:
                 conn_name = c["Name"]
                 break
-        for u in usages:
+        for u in intg_dict.values():
             usage_rows.append({
-                "Connection ID": conn_id,
+                "Connection ID":   conn_id,
                 "Connection Name": conn_name,
                 **u,
             })
