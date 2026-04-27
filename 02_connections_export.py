@@ -119,6 +119,31 @@ def main():
                 conn_url = p.get("propertyValue", p.get("value", ""))
                 break
 
+        # FTP: build URL from Host, Port, and UseSftp (no single URL property exists)
+        if adapter_key == "ftp" and not conn_url:
+            ftp_props = {p.get("propertyName"): p.get("propertyValue", p.get("value", "")) for p in (conn_props or [])}
+            host = ftp_props.get("Host", "")
+            port = ftp_props.get("Port", "")
+            use_sftp = ftp_props.get("UseSftp", "false")
+            if host:
+                protocol = "sftp" if use_sftp == "true" else "ftp"
+                conn_url = f"{protocol}://{host}:{port}" if port else f"{protocol}://{host}"
+
+        # Database: build JDBC URL from Host, Port, SID/ServiceName
+        if adapter_key == "database" and not conn_url:
+            db_props = {p.get("propertyName"): p.get("propertyValue", p.get("value", "")) for p in (conn_props or [])}
+            host = db_props.get("Host", "")
+            port = db_props.get("Port", "1521")
+            service_name = db_props.get("ServiceName", "")
+            sid = db_props.get("SID", "")
+            if host:
+                if service_name:
+                    conn_url = f"jdbc:oracle:thin:@//{host}:{port}/{service_name}"
+                elif sid:
+                    conn_url = f"jdbc:oracle:thin:@{host}:{port}:{sid}"
+                else:
+                    conn_url = f"jdbc:oracle:thin:@{host}:{port}"
+
         usages = list(usage_map.get(conn_id, {}).values())
         usage_count = len(usages)
         active_usage = len([u for u in usages if u["Integration Status"] == "ACTIVATED"])
