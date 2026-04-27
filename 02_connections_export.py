@@ -100,10 +100,24 @@ def main():
             prop_pairs = []
             for p in conn_props:
                 p_name = p.get("displayName", p.get("name", ""))
-                p_val = p.get("value", "")
+                p_val = p.get("propertyValue", p.get("value", ""))
                 if p_val:
                     prop_pairs.append(f"{p_name}={p_val}")
             prop_str = " | ".join(prop_pairs)
+
+        # Extract connection URL based on adapter type
+        _ADAPTER_URL_PROP = {
+            "soap": "targetWSDLURL",
+            "erp":  "Host",
+            "rest": "connectionUrl",
+        }
+        adapter_key = adapter_type.get("name", "").lower() if isinstance(adapter_type, dict) else str(adapter_type).lower()
+        url_prop_name = _ADAPTER_URL_PROP.get(adapter_key, "")
+        conn_url = ""
+        for p in (conn_props or []):
+            if p.get("propertyName", "") == url_prop_name:
+                conn_url = p.get("propertyValue", p.get("value", ""))
+                break
 
         usages = list(usage_map.get(conn_id, {}).values())
         usage_count = len(usages)
@@ -118,6 +132,7 @@ def main():
             "Name": conn.get("name", ""),
             "Description": conn.get("description", ""),
             "Adapter Type": adapter_name,
+            "Connection URL": conn_url,
             "Status": conn.get("status", ""),
             "Test Status": conn.get("testStatus", conn.get("test-status", "")),
             "Role": conn.get("role", ""),
